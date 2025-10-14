@@ -1,0 +1,44 @@
+# Ansible
+*.retry
+inventory
+hosts
+ansible.log
+.vault_pass
+vault_pass.txt
+
+# SSH Keys and Certificates
+*.pem
+*.key
+*.crt
+id_rsa*
+*.pub
+
+# Environment Files
+.env
+*.env
+
+# Reports and Logs
+reports/
+logs/
+*.log
+
+# OS and Editor Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Temporary Files
+tmp/
+temp/
+*.tmp

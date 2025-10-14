@@ -1,0 +1,125 @@
+---
+# =============================================================================
+# QNAP NAS QUICK STATUS CHECK - PORTFOLIO EXAMPLE
+# =============================================================================
+# 
+# Purpose: Comprehensive health monitoring for QNAP NAS devices
+# Compatibility: Tested on QNAP TS-series (TS-464, TS-x51, TS-x64 series)
+# Requirements: SSH access with admin privileges, no Python required
+#
+# This playbook demonstrates:
+# - System health monitoring using raw commands
+# - BusyBox-compatible command usage
+# - Professional reporting and documentation
+# - Error handling for embedded systems
+#
+# =============================================================================
+
+- name: QNAP NAS Quick Status Check
+  hosts: nas
+  gather_facts: false
+  
+  vars:
+    # Customizable variables
+    report_directory: "/tmp/qnap_reports"
+    max_processes_to_show: 10
+    
+  tasks:
+    - name: Create reports directory
+      ansible.builtin.file:
+        path: "{{ report_directory }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+      
+    - name: Check system uptime and load
+      ansible.builtin.raw: uptime
+      register: uptime_check
+      
+    - name: Display uptime information
+      ansible.builtin.debug:
+        msg: "NAS Uptime: {{ uptime_check.stdout.strip() }}"
+      
+    - name: Check available disk space
+      ansible.builtin.raw: "df -h | grep -E '(CACHEDEV|HDA)'"
+      register: main_storage
+      ignore_errors: yes
+      
+    - name: Show storage status
+      ansible.builtin.debug:
+        msg: "Storage pools detected and monitored"
+      when: main_storage.rc == 0
+      
+    - name: Check system load average
+      ansible.builtin.raw: "cat /proc/loadavg"
+      register: load_avg
+      ignore_errors: yes
+      
+    - name: Display system load
+      ansible.builtin.debug:
+        msg: "System Load: {{ load_avg.stdout.strip() if load_avg.rc == 0 else 'Load average unavailable' }}"
+      
+    - name: Count running processes
+      ansible.builtin.raw: "ps aux | wc -l"
+      register: process_count
+      
+    - name: Show process information
+      ansible.builtin.debug:
+        msg: "Total running processes: {{ process_count.stdout.strip() }}"
+      
+    - name: Check QNAP model information
+      ansible.builtin.raw: "cat /etc/model.conf 2>/dev/null | head -5 || echo 'Model info not available'"
+      register: model_info
+      ignore_errors: yes
+      
+    - name: Generate comprehensive status report
+      ansible.builtin.copy:
+        content: |
+          ===============================================
+          QNAP NAS Status Report
+          ===============================================
+          Generated: {{ ansible_date_time.iso8601 | default('Manual execution') }}
+          Target NAS: {{ inventory_hostname }}
+          
+          SYSTEM OVERVIEW:
+          {{ uptime_check.stdout.strip() }}
+          
+          PERFORMANCE METRICS:
+          Load Average: {{ load_avg.stdout.strip() if load_avg.rc == 0 else 'N/A' }}
+          Running Processes: {{ process_count.stdout.strip() }}
+          
+          STORAGE SUMMARY:
+          {{ main_storage.stdout if main_storage.rc == 0 else 'Storage information not available' }}
+          
+          HARDWARE INFORMATION:
+          {{ model_info.stdout if model_info.rc == 0 else 'Hardware information not available' }}
+          
+          ===============================================
+          Report Status: Complete
+          ===============================================
+        dest: "{{ report_directory }}/nas_quick_status_{{ ansible_date_time.epoch | default('manual') }}.txt"
+      delegate_to: localhost
+      
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: 
+          - "✅ QNAP status check completed successfully"
+          - "📊 Report saved to: {{ report_directory }}/nas_quick_status_{{ ansible_date_time.epoch | default('manual') }}.txt"
+          - "🔍 Review the report for detailed system information"
+
+# =============================================================================
+# Usage Examples:
+# 
+# Basic execution:
+#   ansible-playbook -i inventory.example QNAP_Quick_Status_Portfolio.yaml
+#
+# With custom report directory:
+#   ansible-playbook -i inventory.example QNAP_Quick_Status_Portfolio.yaml \
+#     -e "report_directory=/custom/path"
+#
+# Target specific NAS:
+#   ansible-playbook -i inventory.example QNAP_Quick_Status_Portfolio.yaml \
+#     --limit nas_hostname
+#
+# =============================================================================

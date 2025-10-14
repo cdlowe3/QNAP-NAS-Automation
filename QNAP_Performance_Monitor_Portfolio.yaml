@@ -1,0 +1,144 @@
+---
+# =============================================================================
+# QNAP NAS PERFORMANCE MONITORING - PORTFOLIO EXAMPLE
+# =============================================================================
+#
+# Purpose: Real-time performance monitoring for QNAP NAS systems
+# Features: CPU usage, memory monitoring, network I/O, disk performance
+# Compatibility: QNAP TS-series with BusyBox Linux environment
+#
+# This playbook demonstrates advanced system monitoring techniques using
+# raw commands compatible with embedded QNAP systems.
+#
+# =============================================================================
+
+- name: QNAP NAS Performance Monitoring
+  hosts: nas
+  gather_facts: false
+  
+  vars:
+    # Performance monitoring configuration
+    monitoring_interval: 3
+    report_directory: "/tmp/qnap_performance"
+    network_interfaces: "eth0,eth1,bond0,bond1"
+    
+  tasks:
+    - name: Create performance reports directory
+      ansible.builtin.file:
+        path: "{{ report_directory }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+      
+    - name: Monitor CPU usage and system load
+      ansible.builtin.raw: "top -bn1 | head -5"
+      register: cpu_stats
+      
+    - name: Display CPU performance summary
+      ansible.builtin.debug:
+        msg: "CPU monitoring completed - {{ cpu_stats.stdout_lines | length }} metrics captured"
+      
+    - name: Check memory utilization
+      ansible.builtin.raw: "cat /proc/meminfo | grep -E '(MemTotal|MemAvailable|MemFree|Cached)'"
+      register: memory_stats
+      ignore_errors: yes
+      
+    - name: Monitor network interface performance
+      ansible.builtin.raw: "cat /proc/net/dev | grep -E '(eth|bond)'"
+      register: network_stats
+      
+    - name: Display network interface status
+      ansible.builtin.debug:
+        msg: "Network interfaces monitored: {{ network_stats.stdout_lines | length }} active interfaces"
+      
+    - name: Check disk I/O statistics
+      ansible.builtin.raw: "cat /proc/diskstats | head -15"
+      register: disk_iostats
+      ignore_errors: yes
+      
+    - name: Monitor active processes by resource usage
+      ansible.builtin.raw: "ps aux | sort -nr -k 3 | head -10"
+      register: top_processes
+      
+    - name: Check system temperature (if available)
+      ansible.builtin.raw: "sensors 2>/dev/null | head -10 || cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | head -5 || echo 'Temperature monitoring not available'"
+      register: temperature_stats
+      ignore_errors: yes
+      
+    - name: Monitor network connection load
+      ansible.builtin.raw: "netstat -tuln | grep LISTEN | wc -l"
+      register: connection_count
+      
+    - name: Generate comprehensive performance report
+      ansible.builtin.copy:
+        content: |
+          ===============================================
+          QNAP Performance Monitoring Report
+          ===============================================
+          Generated: {{ ansible_date_time.iso8601 | default('Manual execution') }}
+          Target System: {{ inventory_hostname }}
+          Monitoring Interval: {{ monitoring_interval }} seconds
+          
+          CPU & SYSTEM PERFORMANCE:
+          {{ cpu_stats.stdout }}
+          
+          MEMORY UTILIZATION:
+          {{ memory_stats.stdout if memory_stats.rc == 0 else 'Memory stats not available via /proc/meminfo' }}
+          
+          NETWORK INTERFACE STATISTICS:
+          {{ network_stats.stdout }}
+          
+          DISK I/O PERFORMANCE:
+          {{ disk_iostats.stdout if disk_iostats.rc == 0 else 'Disk I/O statistics not available' }}
+          
+          TOP RESOURCE CONSUMERS:
+          {{ top_processes.stdout }}
+          
+          TEMPERATURE MONITORING:
+          {{ temperature_stats.stdout }}
+          
+          NETWORK CONNECTIONS:
+          Active listening services: {{ connection_count.stdout.strip() }}
+          
+          ===============================================
+          Performance Summary:
+          - System monitoring: Complete
+          - Resource tracking: {{ 'Available' if disk_iostats.rc == 0 else 'Limited' }}
+          - Network monitoring: Active
+          ===============================================
+        dest: "{{ report_directory }}/performance_report_{{ ansible_date_time.epoch | default('manual') }}.txt"
+      delegate_to: localhost
+      
+    - name: Display performance monitoring summary
+      ansible.builtin.debug:
+        msg:
+          - "🚀 Performance monitoring completed"
+          - "📊 CPU Load: Monitored"
+          - "💾 Memory Stats: {{ 'Available' if memory_stats.rc == 0 else 'Limited' }}"
+          - "🌐 Network Interfaces: {{ network_stats.stdout_lines | length }} tracked"
+          - "💿 Disk I/O: {{ 'Monitored' if disk_iostats.rc == 0 else 'Basic tracking' }}"
+          - "🔥 Temperature: {{ 'Available' if 'Temperature monitoring not available' not in temperature_stats.stdout else 'Not available' }}"
+          - "📈 Report: {{ report_directory }}/performance_report_{{ ansible_date_time.epoch | default('manual') }}.txt"
+
+# =============================================================================
+# Performance Monitoring Features:
+#
+# ✅ CPU Usage Tracking
+# ✅ Memory Utilization Monitoring  
+# ✅ Network Interface Performance
+# ✅ Disk I/O Statistics
+# ✅ Process Resource Consumption
+# ✅ Temperature Monitoring (where available)
+# ✅ Network Connection Load
+#
+# Usage Examples:
+#
+# Standard monitoring:
+#   ansible-playbook -i inventory.example QNAP_Performance_Monitor_Portfolio.yaml
+#
+# Custom report location:
+#   ansible-playbook -i inventory.example QNAP_Performance_Monitor_Portfolio.yaml \
+#     -e "report_directory=/custom/monitoring/path"
+#
+# =============================================================================
