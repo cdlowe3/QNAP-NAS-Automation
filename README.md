@@ -315,8 +315,3 @@ QNAP-NAS-Automation/
 - QNAP TS-464 running QTS 5.1 and 5.2
 - Ansible 2.14+ on macOS (control machine)
 
----
-
-## Contributing
-
-Pull requests and issues welcome. If you have a different QNAP model or hit a QTS version quirk, open an issue with the playbook output and your model info.
