@@ -1,0 +1,17 @@
+---
+# =============================================================================
+# QNAP Vault Variables — Example
+# =============================================================================
+# Copy this file to vault.yaml and fill in your real values.
+# Then encrypt it with Ansible Vault:
+#
+#   ansible-vault encrypt group_vars/qnap/vault.yaml
+#
+# To edit an already-encrypted file:
+#   ansible-vault edit group_vars/qnap/vault.yaml
+#
+# Never commit vault.yaml without encrypting it first.
+# Add vault.yaml to .gitignore as a safeguard.
+# =============================================================================
+
+vault_qts_password: "your_qnap_admin_password_here"

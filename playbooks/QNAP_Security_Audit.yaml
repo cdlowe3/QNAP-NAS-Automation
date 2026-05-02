@@ -1,0 +1,151 @@
+---
+#=========================================================================================================
+# QNAP NAS Automation
+# Playbook: QNAP Security Audit
+# Purpose: Security monitoring and audit report for the QNAP NAS
+# Note:    Uses raw commands — QNAP QTS has limited Python support
+#
+# Usage:
+#   bash Ansible/NAS_Management/run_qnap_security_audit.sh
+#=========================================================================================================
+
+- name: QNAP Security Audit and Monitoring
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    # ── PRE-CHECK ────────────────────────────────────────────────────────────
+
+    - name: "PRE-CHECK | Verify NAS is reachable"
+      ansible.builtin.raw: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: "PRE-CHECK | Display host status"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Uptime : {{ uptime_result.stdout.strip() }}
+
+    # ── COLLECT ──────────────────────────────────────────────────────────────
+
+    - name: "COLLECT | Active network connections"
+      ansible.builtin.raw: netstat -tuln
+      register: network_connections
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Security-relevant services (ssh, smb, ftp, http)"
+      ansible.builtin.raw: ps aux | grep -E "(ssh|smb|ftp|http)" | grep -v grep
+      register: security_services
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Suspicious process check (nc, netcat, nmap, wget, curl)"
+      ansible.builtin.raw: ps aux | grep -E "(nc |netcat|nmap|wget|curl)" | grep -v grep
+      register: suspicious_processes
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Recent login activity"
+      ansible.builtin.raw: tail -20 /var/log/auth.log 2>/dev/null || tail -20 /var/log/secure 2>/dev/null || echo "Log files not accessible"
+      register: login_logs
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | System user accounts"
+      ansible.builtin.raw: "cat /etc/passwd | cut -d: -f1"
+      register: system_users
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | SSH authorized keys"
+      ansible.builtin.raw: cat /root/.ssh/authorized_keys 2>/dev/null || echo "No authorized_keys file"
+      register: authorized_keys
+      changed_when: false
+
+    - name: "COLLECT | Open listening ports"
+      ansible.builtin.raw: netstat -tuln | grep LISTEN
+      register: listening_ports
+      changed_when: false
+      ignore_errors: yes
+
+    # ── POST-CHECK ───────────────────────────────────────────────────────────
+
+    - name: "POST-CHECK | Display security summary"
+      ansible.builtin.debug:
+        msg: |
+          Host              : {{ inventory_hostname }}
+          Security Services : {{ 'DETECTED' if security_services.stdout | trim else 'NONE FOUND' }}
+          Suspicious Procs  : {{ 'WARNING — CHECK REPORT' if suspicious_processes.stdout | trim else 'NONE DETECTED' }}
+          Listening Ports   : {{ listening_ports.stdout_lines | length if listening_ports.rc == 0 else 0 }} port(s)
+          Authorized Keys   : {{ authorized_keys.stdout_lines | length }} key(s) in /root/.ssh/authorized_keys
+
+    # ── REPORT ───────────────────────────────────────────────────────────────
+
+    - name: "REPORT | Ensure log directory exists on controller"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../Logs/qnap"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Write security audit report to controller"
+      ansible.builtin.copy:
+        content: |
+          ================================================================================
+          QNAP SECURITY AUDIT REPORT
+          ================================================================================
+          Generated : {{ '%Y-%m-%d %H:%M:%S' | strftime }}
+          Host      : {{ inventory_hostname }}
+          ================================================================================
+
+          NETWORK CONNECTIONS:
+          {{ network_connections.stdout.strip() if network_connections.rc == 0 else 'Not available' }}
+
+          SECURITY SERVICES (ssh, smb, ftp, http):
+          {{ security_services.stdout.strip() if security_services.stdout | trim else 'No matching services detected' }}
+
+          SUSPICIOUS PROCESSES (nc, netcat, nmap, wget, curl):
+          {{ suspicious_processes.stdout.strip() if suspicious_processes.stdout | trim else 'None detected' }}
+
+          RECENT LOGIN ACTIVITY:
+          {{ login_logs.stdout.strip() if login_logs.rc == 0 else 'Login logs not accessible' }}
+
+          SYSTEM USER ACCOUNTS:
+          {{ system_users.stdout.strip() if system_users.rc == 0 else 'User list not accessible' }}
+
+          AUTHORIZED SSH KEYS (/root/.ssh/authorized_keys):
+          {{ authorized_keys.stdout.strip() }}
+
+          LISTENING PORTS:
+          {{ listening_ports.stdout.strip() if listening_ports.rc == 0 else 'Not available' }}
+
+          ================================================================================
+          END OF REPORT
+          ================================================================================
+        dest: "{{ playbook_dir }}/../../Logs/qnap/security_audit_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Confirm file written"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Report : Logs/qnap/security_audit_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt
+          Result : SAVED
+
+    # ── LOG ──────────────────────────────────────────────────────────────────
+
+    - name: "LOG | Write structured log entry"
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../../Logs/qnap/qnap_security_audit.log"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }}  |  {{ '%-30s' | format(inventory_hostname) }}  |  Suspicious: {{ 'YES' if suspicious_processes.stdout | trim else 'NO' }}  |  Keys: {{ authorized_keys.stdout_lines | length }}  |  COLLECTED"
+        insertafter: EOF
+        create: true
+        mode: "0644"
+      delegate_to: localhost
+      become: false

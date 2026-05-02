@@ -1,0 +1,162 @@
+---
+#=========================================================================================================
+# QNAP NAS Automation
+# Playbook: QNAP Quick Status
+# Purpose: Health check and status report for the QNAP NAS
+# Note:    Uses raw commands — QNAP QTS has limited Python support
+#
+# Usage:
+#   bash Ansible/NAS_Management/run_qnap_quick_status.sh
+#=========================================================================================================
+
+- name: QNAP NAS Quick Status and Health Check
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    # ── PRE-CHECK ────────────────────────────────────────────────────────────
+
+    - name: "PRE-CHECK | Verify NAS is reachable"
+      ansible.builtin.raw: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: "PRE-CHECK | Display host status"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Uptime : {{ uptime_result.stdout.strip() }}
+
+    # ── COLLECT ──────────────────────────────────────────────────────────────
+
+    - name: "COLLECT | System information"
+      ansible.builtin.raw: uname -a
+      register: system_info
+      changed_when: false
+
+    - name: "COLLECT | QNAP model info"
+      ansible.builtin.raw: cat /etc/model.conf 2>/dev/null || echo 'Model info not available'
+      register: model_info
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Load average"
+      ansible.builtin.raw: cat /proc/loadavg
+      register: load_avg
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Memory usage"
+      ansible.builtin.raw: free -m
+      register: memory_usage
+      changed_when: false
+
+    - name: "COLLECT | Disk usage"
+      ansible.builtin.raw: df -h
+      register: disk_usage
+      changed_when: false
+
+    - name: "COLLECT | Main QNAP storage (CACHEDEV/HDA)"
+      ansible.builtin.raw: "df -h | grep -E '(CACHEDEV|HDA)'"
+      register: main_storage
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | RAID/MD status"
+      ansible.builtin.raw: cat /proc/mdstat
+      register: raid_status
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Running process count"
+      ansible.builtin.raw: ps aux | wc -l
+      register: process_count
+      changed_when: false
+
+    - name: "COLLECT | Top processes"
+      ansible.builtin.raw: ps aux | head -10
+      register: top_processes
+      changed_when: false
+
+    - name: "COLLECT | Network connections"
+      ansible.builtin.raw: netstat -tuln | head -10
+      register: network_status
+      changed_when: false
+      ignore_errors: yes
+
+    # ── REPORT ───────────────────────────────────────────────────────────────
+
+    - name: "REPORT | Ensure log directory exists on controller"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../Logs/qnap"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Write status report to controller"
+      ansible.builtin.copy:
+        content: |
+          ================================================================================
+          QNAP NAS QUICK STATUS REPORT
+          ================================================================================
+          Generated : {{ '%Y-%m-%d %H:%M:%S' | strftime }}
+          Host      : {{ inventory_hostname }}
+          ================================================================================
+
+          SYSTEM INFORMATION:
+          {{ system_info.stdout.strip() }}
+
+          MODEL INFO:
+          {{ model_info.stdout.strip() if model_info.rc == 0 else 'Model information not available' }}
+
+          UPTIME & LOAD:
+          {{ uptime_result.stdout.strip() }}
+          Load Average : {{ load_avg.stdout.strip() if load_avg.rc == 0 else 'N/A' }}
+          Processes    : {{ process_count.stdout.strip() }}
+
+          MEMORY USAGE:
+          {{ memory_usage.stdout.strip() }}
+
+          DISK USAGE:
+          {{ disk_usage.stdout.strip() }}
+
+          MAIN QNAP STORAGE (CACHEDEV/HDA):
+          {{ main_storage.stdout.strip() if main_storage.rc == 0 else 'Not available' }}
+
+          RAID/MD STATUS:
+          {{ raid_status.stdout.strip() if raid_status.rc == 0 else 'No RAID configured or unavailable' }}
+
+          TOP PROCESSES:
+          {{ top_processes.stdout.strip() }}
+
+          NETWORK CONNECTIONS:
+          {{ network_status.stdout.strip() if network_status.rc == 0 else 'Not available' }}
+
+          ================================================================================
+          END OF REPORT
+          ================================================================================
+        dest: "{{ playbook_dir }}/../../Logs/qnap/quick_status_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Confirm file written"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Report : Logs/qnap/quick_status_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt
+          Result : SAVED
+
+    # ── LOG ──────────────────────────────────────────────────────────────────
+
+    - name: "LOG | Write structured log entry"
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../../Logs/qnap/qnap_quick_status.log"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }}  |  {{ '%-30s' | format(inventory_hostname) }}  |  Processes: {{ process_count.stdout.strip() }}  |  COLLECTED"
+        insertafter: EOF
+        create: true
+        mode: "0644"
+      delegate_to: localhost
+      become: false
