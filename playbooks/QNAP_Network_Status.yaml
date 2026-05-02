@@ -1,0 +1,134 @@
+---
+#=========================================================================================================
+# QNAP NAS Automation
+# Playbook: QNAP Network Status
+# Purpose: SMB/NFS share and network service status report for the QNAP NAS
+# Note:    Uses raw commands — QNAP QTS has limited Python support
+#
+# Usage:
+#   bash Ansible/NAS_Management/run_qnap_network_status.sh
+#=========================================================================================================
+
+- name: QNAP Network Share Status Check
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    # ── PRE-CHECK ────────────────────────────────────────────────────────────
+
+    - name: "PRE-CHECK | Verify NAS is reachable"
+      ansible.builtin.raw: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: "PRE-CHECK | Display host status"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Uptime : {{ uptime_result.stdout.strip() }}
+
+    # ── COLLECT ──────────────────────────────────────────────────────────────
+
+    - name: "COLLECT | SMB service processes"
+      ansible.builtin.raw: ps aux | grep -i smb | grep -v grep
+      register: smb_processes
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | NFS service processes"
+      ansible.builtin.raw: ps aux | grep -i nfs | grep -v grep
+      register: nfs_processes
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Available share directories"
+      ansible.builtin.raw: ls -la /share/
+      register: share_directories
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Listening network services"
+      ansible.builtin.raw: netstat -tuln | grep LISTEN
+      register: listening_services
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Network interface info"
+      ansible.builtin.raw: ip addr show
+      register: network_interfaces
+      changed_when: false
+      ignore_errors: yes
+
+    # ── POST-CHECK ───────────────────────────────────────────────────────────
+
+    - name: "POST-CHECK | Display network service summary"
+      ansible.builtin.debug:
+        msg: |
+          Host         : {{ inventory_hostname }}
+          SMB          : {{ 'RUNNING' if smb_processes.stdout | trim else 'NOT DETECTED' }}
+          NFS          : {{ 'RUNNING' if nfs_processes.stdout | trim else 'NOT DETECTED' }}
+          Shares       : {{ share_directories.stdout_lines | length if share_directories.rc == 0 else 0 }} entries in /share/
+          Listening    : {{ listening_services.stdout_lines | length if listening_services.rc == 0 else 0 }} port(s)
+
+    # ── REPORT ───────────────────────────────────────────────────────────────
+
+    - name: "REPORT | Ensure log directory exists on controller"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../Logs/qnap"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Write network status report to controller"
+      ansible.builtin.copy:
+        content: |
+          ================================================================================
+          QNAP NETWORK STATUS REPORT
+          ================================================================================
+          Generated : {{ '%Y-%m-%d %H:%M:%S' | strftime }}
+          Host      : {{ inventory_hostname }}
+          ================================================================================
+
+          SMB PROCESSES:
+          {{ smb_processes.stdout.strip() if smb_processes.stdout | trim else 'No SMB processes detected' }}
+
+          NFS PROCESSES:
+          {{ nfs_processes.stdout.strip() if nfs_processes.stdout | trim else 'No NFS processes detected' }}
+
+          AVAILABLE SHARES (/share/):
+          {{ share_directories.stdout.strip() if share_directories.rc == 0 else 'Share information unavailable' }}
+
+          LISTENING SERVICES:
+          {{ listening_services.stdout.strip() if listening_services.rc == 0 else 'Network service info unavailable' }}
+
+          NETWORK INTERFACES:
+          {{ network_interfaces.stdout.strip() if network_interfaces.rc == 0 else 'Interface info unavailable' }}
+
+          ================================================================================
+          END OF REPORT
+          ================================================================================
+        dest: "{{ playbook_dir }}/../../Logs/qnap/network_status_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Confirm file written"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Report : Logs/qnap/network_status_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt
+          Result : SAVED
+
+    # ── LOG ──────────────────────────────────────────────────────────────────
+
+    - name: "LOG | Write structured log entry"
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../../Logs/qnap/qnap_network_status.log"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }}  |  {{ '%-30s' | format(inventory_hostname) }}  |  SMB: {{ 'UP' if smb_processes.stdout | trim else 'DOWN' }}  |  NFS: {{ 'UP' if nfs_processes.stdout | trim else 'DOWN' }}  |  COLLECTED"
+        insertafter: EOF
+        create: true
+        mode: "0644"
+      delegate_to: localhost
+      become: false

@@ -1,0 +1,20 @@
+---
+# =============================================================================
+# QNAP Group Variables — Example
+# =============================================================================
+# Copy this file to vars.yaml and fill in your values.
+# Sensitive values (passwords) should go in vault.yaml — see vault.yaml.example.
+# =============================================================================
+
+# QTS admin password — pulled from vault so it is never stored in plain text
+qts_password: "{{ vault_qts_password }}"
+
+# Tailscale hostname for your NAS (used by the firmware check cert tasks)
+# Find this in your Tailscale admin console under the Machines tab.
+# Example: my-nas.tail1234.ts.net
+tailscale_hostname: "your-nas.your-tailnet.ts.net"
+
+# If you run a Docker container that uses the Tailscale cert, set its name here.
+# The firmware playbook will restart it after cert renewal.
+# Leave blank ("") to skip the restart step.
+tailscale_app_container: "your-container-name"

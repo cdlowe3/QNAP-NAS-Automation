@@ -1,0 +1,242 @@
+---
+#=========================================================================================================
+# QNAP NAS Automation
+# Playbook: QNAP Firmware Check and Update
+# Purpose: Fully automated QTS firmware check and update — no manual download required
+#
+# Usage:
+#   bash Ansible/NAS_Management/run_qnap_firmware_check.sh
+#
+# How it works:
+#   1. Gets latest XML feed URL from auto_update -d (QNAP's own tool knows the correct feed)
+#   2. Runs get_new_firmware — compares local vs remote version, downloads zip if newer
+#   3. Prompts for confirmation if update was downloaded
+#   4. Unzips on NAS and applies with qcli_firmwareupdate -u uploadfilename=<img> reboot=1
+#   5. Waits for reboot and verifies new version
+#
+# Notes:
+#   - qcli_firmwareupdate -c only checks the security feed — useless for "latest" releases
+#   - get_new_firmware uses /sbin/curl (HTTPS capable) — wget on QTS cannot do HTTPS
+#   - Staging dir: /share/CACHEDEV1_DATA/ — writable, on-disk, survives memory pressure
+#   - /mnt/HDA_ROOT/update is read-only on this device — do not use
+#=========================================================================================================
+
+- name: QNAP Firmware Check and Update
+  hosts: all
+  gather_facts: false
+
+  vars:
+    headless: false
+
+  tasks:
+
+    # ── PRE-CHECK ────────────────────────────────────────────────────────────
+
+    - name: "PRE-CHECK | Verify NAS is reachable"
+      ansible.builtin.raw: uptime
+      changed_when: false
+
+    - name: "PRE-CHECK | Get current firmware version"
+      ansible.builtin.raw: getcfg System Version
+      register: fw_version_raw
+      changed_when: false
+
+    - name: "PRE-CHECK | Get current firmware build number"
+      ansible.builtin.raw: getcfg System Number
+      register: fw_build_raw
+      changed_when: false
+
+    - name: "PRE-CHECK | Get NAS model"
+      ansible.builtin.raw: getcfg System Model
+      register: nas_model_raw
+      changed_when: false
+
+    - name: "PRE-CHECK | Set current version facts"
+      ansible.builtin.set_fact:
+        fw_current: "{{ fw_version_raw.stdout | trim }}"
+        fw_build: "{{ fw_build_raw.stdout | trim }}"
+        fw_current_full: "{{ fw_version_raw.stdout | trim }}.{{ fw_build_raw.stdout | trim }}"
+        nas_model: "{{ nas_model_raw.stdout | trim }}"
+
+    - name: "PRE-CHECK | Display current state"
+      ansible.builtin.debug:
+        msg: |
+          Host             : {{ inventory_hostname }}
+          NAS Model        : {{ nas_model }}
+          Current Firmware : {{ fw_current }} (build {{ fw_build }})
+
+    # ── CHECK ────────────────────────────────────────────────────────────────
+
+    - name: "CHECK | Get latest firmware XML feed URL from QNAP"
+      ansible.builtin.raw: auto_update -d /tmp/ 2>&1 | grep 'latest xml_url' | sed 's/.*= //'
+      register: fw_xml_url_raw
+      changed_when: false
+
+    - name: "CHECK | Set XML feed URL fact"
+      ansible.builtin.set_fact:
+        fw_xml_url: "{{ fw_xml_url_raw.stdout | trim }}"
+
+    - name: "CHECK | Fail if XML URL could not be determined"
+      ansible.builtin.fail:
+        msg: "Could not get latest XML feed URL from auto_update. Output: {{ fw_xml_url_raw.stdout }}"
+      when: fw_xml_url == ''
+
+    - name: "CHECK | Check for update and download if available"
+      ansible.builtin.raw: get_new_firmware {{ fw_xml_url }} /share/CACHEDEV1_DATA/ 2>&1
+      register: fw_download_raw
+      changed_when: "'got firmware' in fw_download_raw.stdout"
+
+    - name: "CHECK | Set update available flag"
+      ansible.builtin.set_fact:
+        fw_update_available: "{{ 'got firmware' in fw_download_raw.stdout }}"
+
+    - name: "CHECK | Parse zip filename from got firmware URL"
+      ansible.builtin.set_fact:
+        fw_zip_filename: "{{ fw_download_raw.stdout | regex_search('got firmware = .+/([^/\n%]+\\.zip)', '\\1') | first | default('') }}"
+      when: fw_update_available
+
+    - name: "CHECK | Set zip and image paths"
+      ansible.builtin.set_fact:
+        fw_zip_path: "/share/CACHEDEV1_DATA/{{ fw_zip_filename }}"
+        fw_img_path: "/share/CACHEDEV1_DATA/{{ fw_zip_filename | regex_replace('\\.zip$', '.img') }}"
+      when: fw_update_available
+
+    - name: "CHECK | Firmware is up to date"
+      ansible.builtin.debug:
+        msg: |
+          Firmware is up to date.
+          Current : {{ fw_current }} (build {{ fw_build }})
+      when: not fw_update_available
+
+    - name: "CHECK | Firmware update downloaded"
+      ansible.builtin.debug:
+        msg: |
+          Firmware update downloaded for {{ nas_model }}.
+          Current  : {{ fw_current }} (build {{ fw_build }})
+          Package  : {{ fw_zip_path }}
+      when: fw_update_available
+
+    # ── PROMPT ───────────────────────────────────────────────────────────────
+
+    - name: "PROMPT | Confirm firmware update (interactive)"
+      ansible.builtin.pause:
+        prompt: |
+
+          Firmware update ready for {{ nas_model }}.
+          Current : {{ fw_current }} (build {{ fw_build }})
+          Package : {{ fw_zip_path }}
+          This will extract the image, apply the update, and reboot the NAS.
+          Type YES to proceed (anything else aborts)
+      register: update_confirm
+      when: fw_update_available and not headless
+
+    - name: "PROMPT | Auto-confirm (headless mode)"
+      ansible.builtin.set_fact:
+        update_confirm:
+          user_input: "YES"
+      when: fw_update_available and headless
+
+    - name: "PROMPT | Abort if not confirmed"
+      ansible.builtin.fail:
+        msg: "Firmware update aborted by user."
+      when: fw_update_available and (update_confirm.user_input | default('') | upper != 'YES')
+
+    # ── UPDATE ───────────────────────────────────────────────────────────────
+
+    - name: "UPDATE | Extract firmware image on NAS"
+      ansible.builtin.raw: unzip -o {{ fw_zip_path }} -d /share/CACHEDEV1_DATA/ 2>&1
+      register: fw_extract_raw
+      changed_when: true
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "UPDATE | Re-authenticate QCLI before apply"
+      ansible.builtin.raw: qcli -l user=admin pw={{ qts_password }} saveauthsid=yes
+      changed_when: false
+      no_log: true
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "UPDATE | Apply firmware and reboot"
+      ansible.builtin.raw: qcli_firmwareupdate -u uploadfilename={{ fw_img_path }} reboot=1 2>&1
+      register: fw_apply_raw
+      changed_when: true
+      ignore_errors: true
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "UPDATE | Wait for NAS to go offline"
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[inventory_hostname]['ansible_host'] | default(inventory_hostname) }}"
+        port: 22
+        state: absent
+        timeout: 300
+        delay: 30
+      delegate_to: localhost
+      become: false
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "UPDATE | Wait for NAS to come back online"
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[inventory_hostname]['ansible_host'] | default(inventory_hostname) }}"
+        port: 22
+        state: started
+        timeout: 1200
+        delay: 120
+      delegate_to: localhost
+      become: false
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    # ── POST-CHECK ───────────────────────────────────────────────────────────
+
+    - name: "POST-CHECK | Get firmware version after update"
+      ansible.builtin.raw: "getcfg System Version; getcfg System Number"
+      register: fw_new_raw
+      changed_when: false
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "POST-CHECK | Display update result"
+      ansible.builtin.debug:
+        msg: |
+          Firmware update complete.
+          Previous : {{ fw_current_full }}
+          New      : {{ fw_new_raw.stdout | trim }}
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "POST-CHECK | Verify Tailscale cert files after reboot"
+      ansible.builtin.raw: >
+        test -f /root/{{ tailscale_hostname }}.crt &&
+        test -f /root/{{ tailscale_hostname }}.key &&
+        echo "CERTS_OK" || echo "CERTS_MISSING"
+      register: cert_check_raw
+      changed_when: false
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "POST-CHECK | Remove stale cert paths (firmware may reset /root/)"
+      ansible.builtin.raw: rm -rf /root/{{ tailscale_hostname }}.crt /root/{{ tailscale_hostname }}.key
+      changed_when: true
+      when:
+        - fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+        - "'CERTS_MISSING' in cert_check_raw.stdout"
+
+    - name: "POST-CHECK | Regenerate Tailscale cert"
+      ansible.builtin.raw: /share/CACHEDEV1_DATA/.qpkg/Tailscale/tailscale cert {{ tailscale_hostname }}
+      changed_when: true
+      when:
+        - fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+        - "'CERTS_MISSING' in cert_check_raw.stdout"
+
+    - name: "POST-CHECK | Restart BourbonTracker after cert renewal"
+      ansible.builtin.raw: /share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/.libs/docker restart {{ tailscale_app_container }}
+      changed_when: true
+      when:
+        - fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+        - "'CERTS_MISSING' in cert_check_raw.stdout"
+
+    - name: "POST-CHECK | Report Tailscale cert status"
+      ansible.builtin.debug:
+        msg: |
+          Tailscale certs  : {{ 'OK' if 'CERTS_OK' in cert_check_raw.stdout else 'RENEWED — firmware reset /root/, certs regenerated and {{ tailscale_app_container }} restarted' }}
+      when: fw_update_available and (update_confirm.user_input | default('') | upper == 'YES')
+
+    - name: "POST-CHECK | No changes made"
+      ansible.builtin.debug:
+        msg: "Run complete. No changes made. Firmware: {{ fw_current }} (build {{ fw_build }})."
+      when: not fw_update_available

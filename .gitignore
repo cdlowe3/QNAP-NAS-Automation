@@ -5,6 +5,9 @@ hosts
 ansible.log
 .vault_pass
 vault_pass.txt
+group_vars/qnap/vars.yaml
+group_vars/qnap/vault.yaml
+Logs/
 
 # SSH Keys and Certificates
 *.pem

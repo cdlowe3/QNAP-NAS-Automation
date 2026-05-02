@@ -1,0 +1,133 @@
+---
+#=========================================================================================================
+# QNAP NAS Automation
+# Playbook: QNAP Storage Monitor
+# Purpose: Disk and storage monitoring report for the QNAP NAS
+# Note:    Uses raw commands — QNAP QTS has limited Python support
+#
+# Usage:
+#   bash Ansible/NAS_Management/run_qnap_storage_monitor.sh
+#=========================================================================================================
+
+- name: QNAP Storage Monitoring
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    # ── PRE-CHECK ────────────────────────────────────────────────────────────
+
+    - name: "PRE-CHECK | Verify NAS is reachable"
+      ansible.builtin.raw: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: "PRE-CHECK | Display host status"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Uptime : {{ uptime_result.stdout.strip() }}
+
+    # ── COLLECT ──────────────────────────────────────────────────────────────
+
+    - name: "COLLECT | All mounted filesystems"
+      ansible.builtin.raw: df -h
+      register: all_filesystems
+      changed_when: false
+
+    - name: "COLLECT | RAID/MD status"
+      ansible.builtin.raw: cat /proc/mdstat
+      register: raid_status
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Disk device information"
+      ansible.builtin.raw: ls -la /dev/sd* /dev/nvme* 2>/dev/null || echo 'No sd/nvme devices found'
+      register: disk_devices
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Storage pool usage (CACHEDEV/HDA/md)"
+      ansible.builtin.raw: "df -h | grep -E '(CACHEDEV|HDA|md)'"
+      register: storage_pools
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "COLLECT | Disk I/O statistics"
+      ansible.builtin.raw: cat /proc/diskstats | head -10
+      register: disk_iostats
+      changed_when: false
+      ignore_errors: yes
+
+    # ── POST-CHECK ───────────────────────────────────────────────────────────
+
+    - name: "POST-CHECK | Display storage summary"
+      ansible.builtin.debug:
+        msg: |
+          Host            : {{ inventory_hostname }}
+          Filesystems     : {{ all_filesystems.stdout_lines | length }} mounted
+          Storage Pools   : {{ storage_pools.stdout_lines | length if storage_pools.rc == 0 else 0 }} (CACHEDEV/HDA/md)
+          RAID Status     : {{ 'AVAILABLE' if raid_status.rc == 0 else 'NOT AVAILABLE' }}
+          Disk Devices    : {{ disk_devices.stdout_lines | length if disk_devices.rc == 0 else 0 }} entries
+
+    # ── REPORT ───────────────────────────────────────────────────────────────
+
+    - name: "REPORT | Ensure log directory exists on controller"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../Logs/qnap"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Write storage report to controller"
+      ansible.builtin.copy:
+        content: |
+          ================================================================================
+          QNAP STORAGE MONITORING REPORT
+          ================================================================================
+          Generated : {{ '%Y-%m-%d %H:%M:%S' | strftime }}
+          Host      : {{ inventory_hostname }}
+          ================================================================================
+
+          ALL FILESYSTEMS:
+          {{ all_filesystems.stdout.strip() }}
+
+          STORAGE POOLS (CACHEDEV/HDA/md):
+          {{ storage_pools.stdout.strip() if storage_pools.rc == 0 else 'Not available' }}
+
+          RAID/MD STATUS:
+          {{ raid_status.stdout.strip() if raid_status.rc == 0 else 'RAID information not available' }}
+
+          DISK DEVICES:
+          {{ disk_devices.stdout.strip() if disk_devices.rc == 0 else 'Disk device information not available' }}
+
+          DISK I/O STATISTICS (Top 10):
+          {{ disk_iostats.stdout.strip() if disk_iostats.rc == 0 else 'I/O statistics not available' }}
+
+          ================================================================================
+          Summary : {{ all_filesystems.stdout_lines | length }} filesystems monitored
+          ================================================================================
+        dest: "{{ playbook_dir }}/../../Logs/qnap/storage_report_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: "REPORT | Confirm file written"
+      ansible.builtin.debug:
+        msg: |
+          Host   : {{ inventory_hostname }}
+          Report : Logs/qnap/storage_report_{{ '%Y-%m-%d_%H-%M-%S' | strftime }}.txt
+          Result : SAVED
+
+    # ── LOG ──────────────────────────────────────────────────────────────────
+
+    - name: "LOG | Write structured log entry"
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../../Logs/qnap/qnap_storage_monitor.log"
+        line: "{{ '%Y-%m-%d %H:%M:%S' | strftime }}  |  {{ '%-30s' | format(inventory_hostname) }}  |  Filesystems: {{ all_filesystems.stdout_lines | length }}  |  RAID: {{ 'UP' if raid_status.rc == 0 else 'N/A' }}  |  COLLECTED"
+        insertafter: EOF
+        create: true
+        mode: "0644"
+      delegate_to: localhost
+      become: false

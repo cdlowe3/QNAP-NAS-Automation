@@ -1,29 +1,35 @@
 # =============================================================================
-# QNAP NAS Inventory Example
+# QNAP NAS Automation — Inventory Example
 # =============================================================================
-# This is a sanitized example inventory for QNAP NAS automation playbooks.
-# Replace the values below with your actual environment details.
+# Copy this file to a file named "inventory" and fill in your values.
+# Never commit your real inventory — add it to .gitignore.
+#
+# Two connection modes are supported:
+#   Local (LAN)  — use 192.168.x.x IPs when on the same network
+#   Remote       — use Tailscale IPs (100.x.x.x) when away from home
+#
+# To switch modes, change ansible_host to the appropriate IP,
+# or maintain two groups as shown below and use --limit when running.
+# =============================================================================
 
+# ---- Local Network ----
 [nas]
-192.168.1.100    # Replace with your QNAP NAS IP address
+my-qnap-nas  ansible_host=192.168.1.100   # Replace with your NAS local IP
 
+# ---- Tailscale (Remote) ----
+[tailscale_nas]
+my-qnap-nas  ansible_host=100.x.x.x       # Replace with your NAS Tailscale IP
+
+# ---- Group Variables ----
 [nas:vars]
-ansible_user=your_nas_username          # Replace with your NAS admin username
-ansible_python_interpreter=/bin/false   # Required for QNAP systems without Python
+ansible_user=admin                         # Default QNAP admin account
+ansible_python_interpreter=/bin/false      # QNAP uses BusyBox — no Python
 
-[other_devices]
-# Example of other devices in your environment
-192.168.1.10     # Example: Raspberry Pi
-192.168.1.20     # Example: Linux server
-
-[all:vars]
-ansible_user=your_username              # Default username for other devices
-ansible_python_interpreter=/usr/bin/python3
+[tailscale_nas:vars]
+ansible_user=admin
+ansible_python_interpreter=/bin/false
 
 # =============================================================================
-# Setup Instructions:
-# 1. Replace IP addresses with your actual device IPs
-# 2. Update usernames to match your environment
-# 3. Ensure SSH key authentication is configured
-# 4. Test connectivity: ansible nas -m ping
+# Quick connectivity test:
+#   ansible nas -m ping -i inventory
 # =============================================================================
